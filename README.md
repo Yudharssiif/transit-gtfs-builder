@@ -38,11 +38,11 @@ Digitize stops and routes in QGIS, set the service pattern, and export a validat
 
 Copy the `transit_gtfs_builder` folder into your QGIS plugins directory, then restart QGIS and enable the plugin under **Plugins > Manage and Install Plugins > Installed**.
 
-| OS      | Plugins directory                                                          |
-| ------- | -------------------------------------------------------------------------- |
-| Windows | `%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins`                     |
-| Linux   | `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins`                |
-| macOS   | `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins` |
+| OS | Plugins directory |
+|---|---|
+| Windows | `%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins` |
+| Linux | `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins` |
+| macOS | `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins` |
 
 ### From GitHub
 
@@ -64,19 +64,19 @@ zip -r transit_gtfs_builder.zip transit_gtfs_builder -x "*/__pycache__/*"
 
 **Stops layer (points)**
 
-| Field      | Required    | Notes                                                                                      |
-| ---------- | ----------- | ------------------------------------------------------------------------------------------ |
-| Name field | Recommended | Becomes `stop_name`. Missing names become `Stop <id>`.                                     |
-| ID field   | Optional    | Becomes `stop_id`. Missing IDs become `S0001`, `S0002`, and so on. Duplicates are renamed. |
+| Field | Required | Notes |
+|---|---|---|
+| Name field | Recommended | Becomes `stop_name`. Missing names become `Stop <id>`. |
+| ID field | Optional | Becomes `stop_id`. Missing IDs become `S0001`, `S0002`, and so on. Duplicates are renamed. |
 
 **Routes layer (lines)**
 
-| Field                  | Required | Notes                                                                        |
-| ---------------------- | -------- | ---------------------------------------------------------------------------- |
-| Route ID               | Optional | Defaults to `R1`, `R2`, and so on.                                           |
-| Short name             | Optional | If both names are empty, the route ID is used as the short name.             |
-| Long name              | Optional |                                                                              |
-| Headway (min)          | Optional | Overrides the default headway for that route.                                |
+| Field | Required | Notes |
+|---|---|---|
+| Route ID | Optional | Defaults to `R1`, `R2`, and so on. |
+| Short name | Optional | If both names are empty, the route ID is used as the short name. |
+| Long name | Optional | |
+| Headway (min) | Optional | Overrides the default headway for that route. |
 | First / last departure | Optional | `HH:MM` or `HH:MM:SS`. Hours above 23 are allowed for service past midnight. |
 
 The template layers use the field names `stop_id`, `stop_name`, `route_id`, `short_name`, `long_name`, `headway_min`, `first_dep`, and `last_dep`. Fields with these names (or close variants) are selected automatically.
@@ -91,17 +91,17 @@ The template layers use the field names `stop_id`, `stop_name`, `route_id`, `sho
 
 ## Output files
 
-| File              | Content                                           |
-| ----------------- | ------------------------------------------------- |
-| `agency.txt`      | Agency name, URL, timezone, language              |
-| `stops.txt`       | Stops in WGS84                                    |
-| `routes.txt`      | Routes with the chosen vehicle type               |
-| `trips.txt`       | One trip per route and direction                  |
-| `stop_times.txt`  | Relative times and `shape_dist_traveled` (meters) |
-| `calendar.txt`    | Weekly service days and validity dates            |
-| `frequencies.txt` | Headway-based service windows                     |
-| `shapes.txt`      | Route geometry with `shape_dist_traveled`         |
-| `feed_info.txt`   | Publisher, language, validity, version            |
+| File | Content |
+|---|---|
+| `agency.txt` | Agency name, URL, timezone, language |
+| `stops.txt` | Stops in WGS84 |
+| `routes.txt` | Routes with the chosen vehicle type |
+| `trips.txt` | One trip per route and direction |
+| `stop_times.txt` | Relative times and `shape_dist_traveled` (meters) |
+| `calendar.txt` | Weekly service days and validity dates |
+| `frequencies.txt` | Headway-based service windows |
+| `shapes.txt` | Route geometry with `shape_dist_traveled` |
+| `feed_info.txt` | Publisher, language, validity, version |
 
 Files are written as UTF-8 and zipped together.
 
@@ -145,5 +145,5 @@ Released under the GNU General Public License v2.0 or later (GPL-2.0-or-later), 
 
 ## Author
 
-**Yussuf Waridi** (Geonovex)
+**Yussuf Waridi** (Street Mappers)
 Contact: streetmappers+qgisplugin@gmail.com

@@ -1,7 +1,11 @@
 import os
 
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction
+
+try:  # Qt6: QAction lives in QtGui
+    from qgis.PyQt.QtGui import QAction
+except ImportError:  # Qt5
+    from qgis.PyQt.QtWidgets import QAction
 
 MENU = "&Transit GTFS Builder"
 
@@ -14,7 +18,9 @@ class TransitGtfsBuilder:
 
     def initGui(self):
         icon = QIcon(os.path.join(os.path.dirname(__file__), "icon.svg"))
-        self.action = QAction(icon, "Transit GTFS Builder", self.iface.mainWindow())
+        self.action = QAction(
+            icon, "Transit GTFS Builder", self.iface.mainWindow()
+        )
         self.action.triggered.connect(self.run)
         self.iface.addPluginToMenu(MENU, self.action)
         self.iface.addToolBarIcon(self.action)
@@ -31,6 +37,7 @@ class TransitGtfsBuilder:
     def run(self):
         if self.dlg is None:
             from .dialog import GtfsBuilderDialog
+
             self.dlg = GtfsBuilderDialog(self.iface, self.iface.mainWindow())
         self.dlg.show()
         self.dlg.raise_()

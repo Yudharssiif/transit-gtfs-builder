@@ -1,29 +1,49 @@
 import os
 
 from qgis.PyQt.QtCore import QDate, QTime, QTimeZone, Qt
-from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDialog, QDoubleSpinBox,
-                                 QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-                                 QCompleter, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
-                                 QTabWidget, QTimeEdit, QVBoxLayout, QWidget)
+from qgis.PyQt.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDateEdit,
+    QDialog,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QCompleter,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QTabWidget,
+    QTimeEdit,
+    QVBoxLayout,
+    QWidget,
+)
 from qgis.core import Qgis, QgsProject, QgsVectorLayer
 from qgis.gui import QgsFieldComboBox, QgsMapLayerComboBox
 
 from .data import LANGUAGES, ROUTE_TYPES, TIMEZONES
 from .gtfs_core import DAYS, build_feed, export_feed, validate
 
+
 def _layer_filter(kind):
     try:
         return getattr(Qgis.LayerFilter, kind)
     except Exception:
         from qgis.core import QgsMapLayerProxyModel
+
         return getattr(QgsMapLayerProxyModel, kind)
 
 
 def _info_level():
-    try:
-        return Qgis.MessageLevel.Info
-    except AttributeError:
-        return Qgis.Info
+    """Info message level, for both old (3.22) and new/Qt6 QGIS."""
+    level = getattr(Qgis, "MessageLevel", None)
+    if level is not None and hasattr(level, "Info"):
+        return level.Info
+    return getattr(Qgis, "Info")  # legacy unscoped enum, QGIS < 3.30
 
 
 class GtfsBuilderDialog(QDialog):
@@ -54,7 +74,9 @@ class GtfsBuilderDialog(QDialog):
         for name, code in LANGUAGES:
             self.agency_lang.addItem("%s (%s)" % (name, code), code)
         self._searchable(self.agency_lang)
-        self.agency_lang.setCurrentIndex(max(self.agency_lang.findData("en"), 0))
+        self.agency_lang.setCurrentIndex(
+            max(self.agency_lang.findData("en"), 0)
+        )
         self.route_type = QComboBox()
         for label, val in ROUTE_TYPES:
             self.route_type.addItem(label, val)
@@ -96,17 +118,35 @@ class GtfsBuilderDialog(QDialog):
         self.route_head_f = QgsFieldComboBox()
         self.route_first_f = QgsFieldComboBox()
         self.route_last_f = QgsFieldComboBox()
-        for cb in (self.stop_name_f, self.stop_id_f, self.route_id_f, self.route_short_f,
-                   self.route_long_f, self.route_head_f, self.route_first_f, self.route_last_f):
+        for cb in (
+            self.stop_name_f,
+            self.stop_id_f,
+            self.route_id_f,
+            self.route_short_f,
+            self.route_long_f,
+            self.route_head_f,
+            self.route_first_f,
+            self.route_last_f,
+        ):
             cb.setAllowEmptyFieldName(True)
-        self._link(self.stops_cb, [(self.stop_name_f, ("stop_name", "name")),
-                                   (self.stop_id_f, ("stop_id", "id"))])
-        self._link(self.routes_cb, [(self.route_id_f, ("route_id", "id")),
-                                    (self.route_short_f, ("short_name", "route_short_name")),
-                                    (self.route_long_f, ("long_name", "route_long_name", "name")),
-                                    (self.route_head_f, ("headway_min", "headway")),
-                                    (self.route_first_f, ("first_dep", "first")),
-                                    (self.route_last_f, ("last_dep", "last"))])
+        self._link(
+            self.stops_cb,
+            [
+                (self.stop_name_f, ("stop_name", "name")),
+                (self.stop_id_f, ("stop_id", "id")),
+            ],
+        )
+        self._link(
+            self.routes_cb,
+            [
+                (self.route_id_f, ("route_id", "id")),
+                (self.route_short_f, ("short_name", "route_short_name")),
+                (self.route_long_f, ("long_name", "route_long_name", "name")),
+                (self.route_head_f, ("headway_min", "headway")),
+                (self.route_first_f, ("first_dep", "first")),
+                (self.route_last_f, ("last_dep", "last")),
+            ],
+        )
         f.addRow(QLabel("<b>Stops (point layer)</b>"))
         f.addRow("Layer", self.stops_cb)
         f.addRow("Name field", self.stop_name_f)
@@ -156,7 +196,12 @@ class GtfsBuilderDialog(QDialog):
         f.addRow("Average speed", self.speed)
         f.addRow("Time at each stop", self.dwell)
         f.addRow(self.both_dirs)
-        f.addRow(QLabel("Route fields on the Layers tab override these defaults per route."))
+        f.addRow(
+            QLabel(
+                "Route fields on the Layers tab override these "
+                "defaults per route."
+            )
+        )
         self.tabs.addTab(w, "3. Service")
 
     def _export_tab(self):
@@ -198,6 +243,7 @@ class GtfsBuilderDialog(QDialog):
                         if g in names:
                             cb.setField(names[g])
                             break
+
         layer_cb.layerChanged.connect(update)
         update()
 
@@ -214,18 +260,18 @@ class GtfsBuilderDialog(QDialog):
     def _system_timezone():
         try:
             tz = bytes(QTimeZone.systemTimeZoneId()).decode()
-            if tz in TIMEZONES:
-                return tz
-        except Exception:
-            pass
-        return "UTC"
+        except (AttributeError, TypeError, UnicodeDecodeError):
+            return "UTC"
+        return tz if tz in TIMEZONES else "UTC"
 
     def _lang_code(self):
         idx = self.agency_lang.findText(self.agency_lang.currentText())
         return self.agency_lang.itemData(idx) if idx >= 0 else ""
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "Choose output folder", self.out_dir.text())
+        d = QFileDialog.getExistingDirectory(
+            self, "Choose output folder", self.out_dir.text()
+        )
         if d:
             self.out_dir.setText(d)
 
@@ -233,12 +279,20 @@ class GtfsBuilderDialog(QDialog):
         self.log.appendPlainText("[%s] %s" % (level, msg))
 
     def _create_templates(self):
-        stops = QgsVectorLayer("Point?crs=EPSG:4326&field=stop_id:string&field=stop_name:string",
-                               "GTFS Stops", "memory")
+        stops = QgsVectorLayer(
+            "Point?crs=EPSG:4326&field=stop_id:string&field=stop_name:string",
+            "GTFS Stops",
+            "memory",
+        )
         routes = QgsVectorLayer(
-            "LineString?crs=EPSG:4326&field=route_id:string&field=short_name:string"
-            "&field=long_name:string&field=headway_min:double&field=first_dep:string"
-            "&field=last_dep:string", "GTFS Routes", "memory")
+            "LineString?crs=EPSG:4326&field=route_id:string"
+            "&field=short_name:string"
+            "&field=long_name:string&field=headway_min:double"
+            "&field=first_dep:string"
+            "&field=last_dep:string",
+            "GTFS Routes",
+            "memory",
+        )
         QgsProject.instance().addMapLayer(stops)
         QgsProject.instance().addMapLayer(routes)
         self.stops_cb.setLayer(stops)
@@ -247,12 +301,16 @@ class GtfsBuilderDialog(QDialog):
         stops.startEditing()
         self.iface.messageBar().pushMessage(
             "GTFS Builder",
-            "Temporary layers added. Digitize stops and routes, then export them to GeoPackage "
-            "to keep them.", level=_info_level(), duration=10)
+            "Temporary layers added. Digitize stops and routes, then "
+            "export them to GeoPackage to keep them.",
+            level=_info_level(),
+            duration=10,
+        )
 
     def _cfg(self):
         def fld(cb):
             return cb.currentField() or None
+
         return {
             "agency_name": self.agency_name.text().strip(),
             "agency_url": self.agency_url.text().strip(),
@@ -262,10 +320,14 @@ class GtfsBuilderDialog(QDialog):
             "days": [cb.isChecked() for cb in self.day_boxes],
             "start_date": self.start_date.date().toString("yyyyMMdd"),
             "end_date": self.end_date.date().toString("yyyyMMdd"),
-            "stop_name_field": fld(self.stop_name_f), "stop_id_field": fld(self.stop_id_f),
-            "route_id_field": fld(self.route_id_f), "route_short_field": fld(self.route_short_f),
-            "route_long_field": fld(self.route_long_f), "route_headway_field": fld(self.route_head_f),
-            "route_first_field": fld(self.route_first_f), "route_last_field": fld(self.route_last_f),
+            "stop_name_field": fld(self.stop_name_f),
+            "stop_id_field": fld(self.stop_id_f),
+            "route_id_field": fld(self.route_id_f),
+            "route_short_field": fld(self.route_short_f),
+            "route_long_field": fld(self.route_long_f),
+            "route_headway_field": fld(self.route_head_f),
+            "route_first_field": fld(self.route_first_f),
+            "route_last_field": fld(self.route_last_f),
             "buffer_m": self.buffer_m.value(),
             "headway_min": self.headway.value(),
             "first_dep": self.first_dep.time().toString("HH:mm"),
@@ -276,9 +338,16 @@ class GtfsBuilderDialog(QDialog):
         }
 
     def _run(self, export):
-        stops, routes = self.stops_cb.currentLayer(), self.routes_cb.currentLayer()
+        stops, routes = (
+            self.stops_cb.currentLayer(),
+            self.routes_cb.currentLayer(),
+        )
         if stops is None or routes is None:
-            QMessageBox.warning(self, "GTFS Builder", "Choose a stops layer and a routes layer first.")
+            QMessageBox.warning(
+                self,
+                "GTFS Builder",
+                "Choose a stops layer and a routes layer first.",
+            )
             return
         cfg = self._cfg()
         self.log.clear()
@@ -292,15 +361,23 @@ class GtfsBuilderDialog(QDialog):
         results = validate(feed, cfg)
         for lvl, msg in results:
             self._log(lvl, msg)
-        if any(l == "ERROR" for l, _ in results):
+        if any(lvl == "ERROR" for lvl, _ in results):
             self._log("ERROR", "Fix the errors above, then try again.")
             return
         if export:
             try:
-                path = export_feed(feed, self.out_dir.text().strip(), self.zip_name.text().strip() or "gtfs_feed.zip")
+                path = export_feed(
+                    feed,
+                    self.out_dir.text().strip(),
+                    self.zip_name.text().strip() or "gtfs_feed.zip",
+                )
             except Exception as e:
                 self._log("ERROR", "Export failed: %s" % e)
                 return
             self._log("OK", "Exported: %s" % path)
-            self.iface.messageBar().pushMessage("GTFS Builder", "Feed exported to %s" % path,
-                                                level=_info_level(), duration=8)
+            self.iface.messageBar().pushMessage(
+                "GTFS Builder",
+                "Feed exported to %s" % path,
+                level=_info_level(),
+                duration=8,
+            )
