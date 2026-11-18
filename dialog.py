@@ -1,7 +1,8 @@
 import os
 
-from qgis.PyQt.QtCore import QDate, QTime, QTimeZone, Qt
+from qgis.PyQt.QtCore import QDate, QLocale, QTime, QTimeZone, Qt
 from qgis.PyQt.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDateEdit,
@@ -17,6 +18,8 @@ from qgis.PyQt.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QTimeEdit,
     QVBoxLayout,
@@ -25,7 +28,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import Qgis, QgsProject, QgsVectorLayer
 from qgis.gui import QgsFieldComboBox, QgsMapLayerComboBox
 
-from .data import LANGUAGES, ROUTE_TYPES, TIMEZONES
+from .data import CURRENCIES, LANGUAGES, ROUTE_TYPES, TIMEZONES
 from .gtfs_core import DAYS, build_feed, export_feed, validate
 
 
@@ -58,6 +61,7 @@ class GtfsBuilderDialog(QDialog):
         self._agency_tab()
         self._layers_tab()
         self._service_tab()
+        self._fares_tab()
         self._export_tab()
 
     # ---------------------------------------------------------------- tabs
@@ -82,7 +86,13 @@ class GtfsBuilderDialog(QDialog):
             self.route_type.addItem(label, val)
         self.route_type.setCurrentIndex(max(self.route_type.findData(3), 0))
         f.addRow("Agency name", self.agency_name)
+        self.agency_phone = QLineEdit()
+        self.agency_phone.setPlaceholderText("+255 700 000 000")
+        self.agency_email = QLineEdit()
+        self.agency_email.setPlaceholderText("contact@example.org")
         f.addRow("Agency URL", self.agency_url)
+        f.addRow("Phone", self.agency_phone)
+        f.addRow("Email", self.agency_email)
         f.addRow("Timezone", self.agency_tz)
         f.addRow("Language", self.agency_lang)
         f.addRow("Vehicle type", self.route_type)
@@ -118,6 +128,7 @@ class GtfsBuilderDialog(QDialog):
         self.route_head_f = QgsFieldComboBox()
         self.route_first_f = QgsFieldComboBox()
         self.route_last_f = QgsFieldComboBox()
+        self.route_fare_f = QgsFieldComboBox()
         for cb in (
             self.stop_name_f,
             self.stop_id_f,
@@ -127,6 +138,7 @@ class GtfsBuilderDialog(QDialog):
             self.route_head_f,
             self.route_first_f,
             self.route_last_f,
+            self.route_fare_f,
         ):
             cb.setAllowEmptyFieldName(True)
         self._link(
@@ -145,6 +157,7 @@ class GtfsBuilderDialog(QDialog):
                 (self.route_head_f, ("headway_min", "headway")),
                 (self.route_first_f, ("first_dep", "first")),
                 (self.route_last_f, ("last_dep", "last")),
+                (self.route_fare_f, ("fare", "price")),
             ],
         )
         f.addRow(QLabel("<b>Stops (point layer)</b>"))
@@ -159,6 +172,7 @@ class GtfsBuilderDialog(QDialog):
         f.addRow("Headway, min (optional)", self.route_head_f)
         f.addRow("First departure (optional)", self.route_first_f)
         f.addRow("Last departure (optional)", self.route_last_f)
+        f.addRow("Fare (optional)", self.route_fare_f)
         self.buffer_m = QSpinBox()
         self.buffer_m.setRange(1, 2000)
         self.buffer_m.setValue(75)
@@ -204,6 +218,118 @@ class GtfsBuilderDialog(QDialog):
         )
         self.tabs.addTab(w, "3. Service")
 
+    def _fares_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.fare_on = QCheckBox("Include fare information")
+        v.addWidget(self.fare_on)
+        f = QFormLayout()
+        self.fare_currency = QComboBox()
+        for code, name in CURRENCIES:
+            self.fare_currency.addItem("%s - %s" % (code, name), code)
+        self._searchable(self.fare_currency)
+        self.fare_currency.setCurrentIndex(
+            max(self.fare_currency.findData(self._system_currency()), 0)
+        )
+        self.fare_pay = QComboBox()
+        self.fare_pay.addItem("Pay on board", 0)
+        self.fare_pay.addItem("Pay before boarding", 1)
+        self.fare_transfers = QComboBox()
+        self.fare_transfers.addItem("No transfers", 0)
+        self.fare_transfers.addItem("1 transfer", 1)
+        self.fare_transfers.addItem("2 transfers", 2)
+        self.fare_transfers.addItem("Unlimited transfers", "")
+        f.addRow("Currency", self.fare_currency)
+        f.addRow("Payment", self.fare_pay)
+        f.addRow("Transfers", self.fare_transfers)
+        v.addLayout(f)
+        v.addWidget(QLabel("<b>Fare by route distance</b>"))
+        self.fare_table = QTableWidget(0, 3)
+        self.fare_table.setHorizontalHeaderLabels(
+            ["From (km)", "To (km)", "Fare"]
+        )
+        self.fare_table.horizontalHeader().setStretchLastSection(True)
+        self.fare_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        v.addWidget(self.fare_table)
+        row = QHBoxLayout()
+        add = QPushButton("Add band")
+        add.clicked.connect(lambda: self._add_band())
+        rem = QPushButton("Remove selected")
+        rem.clicked.connect(self._remove_band)
+        for b in (add, rem):
+            row.addWidget(b)
+        v.addLayout(row)
+        self.fare_round_up = QCheckBox(
+            "If a route length falls between bands, use the next band up"
+        )
+        self.fare_round_up.setChecked(True)
+        v.addWidget(self.fare_round_up)
+        v.addWidget(
+            QLabel(
+                "Each route gets the fare of the band that matches its "
+                "length. A value in the route Fare field (Layers tab) "
+                "overrides the bands, for example for flat-fare routes."
+            )
+        )
+        self.tabs.addTab(w, "4. Fares")
+
+    def _add_band(self, lo="", hi="", fare=""):
+        r = self.fare_table.rowCount()
+        self.fare_table.insertRow(r)
+        for c, val in enumerate((lo, hi, fare)):
+            self.fare_table.setItem(r, c, QTableWidgetItem(str(val)))
+
+    def _remove_band(self):
+        rows = sorted(
+            {i.row() for i in self.fare_table.selectedItems()}, reverse=True
+        )
+        for r in rows:
+            self.fare_table.removeRow(r)
+
+    @staticmethod
+    def _system_currency():
+        try:
+            fmt = QLocale.CurrencySymbolFormat.CurrencyIsoCode
+            code = QLocale.system().currencySymbol(fmt)
+        except (AttributeError, TypeError):
+            return "USD"
+        return code or "USD"
+
+    def _fare_cfg(self):
+        idx = self.fare_currency.findText(self.fare_currency.currentText())
+        if idx >= 0:
+            currency = self.fare_currency.itemData(idx)
+        else:
+            currency = self.fare_currency.currentText().strip().upper()
+        bands, errors = [], []
+        for r in range(self.fare_table.rowCount()):
+            vals = []
+            for c in range(3):
+                item = self.fare_table.item(r, c)
+                text = item.text() if item else ""
+                vals.append(text.strip().replace(",", ""))
+            if not any(vals):
+                continue
+            try:
+                bands.append(tuple(float(x) for x in vals))
+            except ValueError:
+                errors.append(
+                    "Fare table row %d has a missing or non-numeric value."
+                    % (r + 1)
+                )
+        return {
+            "enabled": self.fare_on.isChecked(),
+            "currency": currency,
+            "payment_method": self.fare_pay.currentData(),
+            "transfers": self.fare_transfers.currentData(),
+            "bands": bands,
+            "parse_errors": errors,
+            "round_up": self.fare_round_up.isChecked(),
+            "has_route_field": bool(self.route_fare_f.currentField()),
+        }
+
     def _export_tab(self):
         w = QWidget()
         v = QVBoxLayout(w)
@@ -229,7 +355,7 @@ class GtfsBuilderDialog(QDialog):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         v.addWidget(self.log)
-        self.tabs.addTab(w, "4. Export")
+        self.tabs.addTab(w, "5. Export")
 
     # ------------------------------------------------------------- helpers
     def _link(self, layer_cb, field_cbs):
@@ -289,7 +415,7 @@ class GtfsBuilderDialog(QDialog):
             "&field=short_name:string"
             "&field=long_name:string&field=headway_min:double"
             "&field=first_dep:string"
-            "&field=last_dep:string",
+            "&field=last_dep:string&field=fare:double",
             "GTFS Routes",
             "memory",
         )
@@ -316,6 +442,8 @@ class GtfsBuilderDialog(QDialog):
             "agency_url": self.agency_url.text().strip(),
             "agency_timezone": self.agency_tz.currentText().strip(),
             "agency_lang": self._lang_code(),
+            "agency_phone": self.agency_phone.text().strip(),
+            "agency_email": self.agency_email.text().strip(),
             "route_type": self.route_type.currentData(),
             "days": [cb.isChecked() for cb in self.day_boxes],
             "start_date": self.start_date.date().toString("yyyyMMdd"),
@@ -328,6 +456,8 @@ class GtfsBuilderDialog(QDialog):
             "route_headway_field": fld(self.route_head_f),
             "route_first_field": fld(self.route_first_f),
             "route_last_field": fld(self.route_last_f),
+            "route_fare_field": fld(self.route_fare_f),
+            "fares": self._fare_cfg(),
             "buffer_m": self.buffer_m.value(),
             "headway_min": self.headway.value(),
             "first_dep": self.first_dep.time().toString("HH:mm"),

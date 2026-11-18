@@ -23,6 +23,8 @@ FILES = {
         "agency_url",
         "agency_timezone",
         "agency_lang",
+        "agency_phone",
+        "agency_email",
     ],
     "stops.txt": ["stop_id", "stop_name", "stop_lat", "stop_lon"],
     "routes.txt": [
@@ -63,10 +65,21 @@ FILES = {
         "shape_pt_sequence",
         "shape_dist_traveled",
     ],
+    "fare_attributes.txt": [
+        "fare_id",
+        "agency_id",
+        "price",
+        "currency_type",
+        "payment_method",
+        "transfers",
+    ],
+    "fare_rules.txt": ["fare_id", "route_id"],
     "feed_info.txt": [
         "feed_publisher_name",
         "feed_publisher_url",
         "feed_lang",
+        "feed_contact_email",
+        "feed_contact_url",
         "feed_start_date",
         "feed_end_date",
         "feed_version",
@@ -195,6 +208,8 @@ def build_feed(stops_layer, routes_layer, cfg):
             "agency_url": cfg["agency_url"],
             "agency_timezone": cfg["agency_timezone"],
             "agency_lang": cfg.get("agency_lang", ""),
+            "agency_phone": cfg.get("agency_phone", ""),
+            "agency_email": cfg.get("agency_email", ""),
         }
     )
     cal = {
@@ -210,6 +225,8 @@ def build_feed(stops_layer, routes_layer, cfg):
             "feed_publisher_name": cfg["agency_name"],
             "feed_publisher_url": cfg["agency_url"],
             "feed_lang": cfg.get("agency_lang", ""),
+            "feed_contact_email": cfg.get("agency_email", ""),
+            "feed_contact_url": cfg["agency_url"],
             "feed_start_date": cfg["start_date"],
             "feed_end_date": cfg["end_date"],
             "feed_version": date.today().strftime("%Y%m%d"),
@@ -224,6 +241,8 @@ def build_feed(stops_layer, routes_layer, cfg):
         routes_layer.crs(), wgs, QgsProject.instance()
     )
     seen_routes = set()
+    route_infos = []
+    est_sec = 0.0
 
     for j, f in enumerate(routes_layer.getFeatures(), start=1):
         g = f.geometry()
@@ -327,14 +346,6 @@ def build_feed(stops_layer, routes_layer, cfg):
                 "route_type": cfg["route_type"],
             }
         )
-        log.append(
-            (
-                "INFO",
-                "Route %s: %d stops, %.2f km."
-                % (rid, len(matches), total / 1000.0),
-            )
-        )
-
         directions = [0, 1] if cfg["both_directions"] else [0]
         for d in directions:
             if d == 0:
@@ -375,6 +386,8 @@ def build_feed(stops_layer, routes_layer, cfg):
                         "shape_dist_traveled": round(along, 1),
                     }
                 )
+            if d == 0:
+                est_sec = clock
             t["frequencies.txt"].append(
                 {
                     "trip_id": trip_id,
@@ -394,7 +407,112 @@ def build_feed(stops_layer, routes_layer, cfg):
                         "shape_dist_traveled": round(c, 1),
                     }
                 )
+
+        window = parse_time(last) - parse_time(first)
+        n_dep = int(window // (headway * 60)) + 1 if window > 0 else 0
+        log.append(
+            (
+                "INFO",
+                "Route %s: %d stops, %.2f km, estimated %.0f min end to end "
+                "(%g km/h, %d s stops), about %d departures per direction."
+                % (
+                    rid,
+                    len(matches),
+                    total / 1000.0,
+                    est_sec / 60.0,
+                    cfg["speed_kmh"],
+                    dwell,
+                    n_dep,
+                ),
+            )
+        )
+        flat_fare = None
+        fv = _val(f, cfg.get("route_fare_field"))
+        if fv:
+            try:
+                flat_fare = float(fv.replace(",", ""))
+                if flat_fare < 0:
+                    raise ValueError
+            except ValueError:
+                flat_fare = None
+                log.append(
+                    ("WARN", "Route %s: bad fare '%s', ignored." % (rid, fv))
+                )
+        route_infos.append(
+            {
+                "route_id": rid,
+                "length_km": total / 1000.0,
+                "flat_fare": flat_fare,
+            }
+        )
+
+    fares = cfg.get("fares") or {}
+    if fares.get("enabled"):
+        _build_fares(t, route_infos, fares, log, agency_id)
     return {"tables": t}, log
+
+
+def format_price(value, currency):
+    """Format a price with the ISO 4217 number of decimals."""
+    from .data import CURRENCY_DIGITS
+
+    return "%.*f" % (CURRENCY_DIGITS.get(currency, 2), value)
+
+
+def pick_band(length_km, bands, round_up=True):
+    """Return (band, exact). band is (from_km, to_km, price) or None."""
+    ordered = sorted(bands)
+    for b in ordered:
+        if b[0] <= length_km <= b[1]:
+            return b, True
+    if round_up:
+        for b in ordered:
+            if b[0] > length_km:
+                return b, False
+    return None, False
+
+
+def _build_fares(t, infos, fares, log, agency_id):
+    cur = fares["currency"]
+    ids = {}
+    for info in infos:
+        rid, km = info["route_id"], info["length_km"]
+        price, why = None, ""
+        if info["flat_fare"] is not None:
+            price, why = info["flat_fare"], "route fare field"
+        elif fares.get("bands"):
+            band, exact = pick_band(km, fares["bands"], fares["round_up"])
+            if band:
+                price = band[2]
+                why = "%g-%g km band" % (band[0], band[1])
+                if not exact:
+                    why += ", next band up"
+        if price is None:
+            log.append(
+                ("WARN", "Route %s (%.1f km): no matching fare." % (rid, km))
+            )
+            continue
+        key = round(price, 4)
+        if key not in ids:
+            ids[key] = "FARE_%g" % price
+            t["fare_attributes.txt"].append(
+                {
+                    "fare_id": ids[key],
+                    "agency_id": agency_id,
+                    "price": format_price(price, cur),
+                    "currency_type": cur,
+                    "payment_method": fares["payment_method"],
+                    "transfers": fares["transfers"],
+                }
+            )
+        t["fare_rules.txt"].append({"fare_id": ids[key], "route_id": rid})
+        log.append(
+            (
+                "INFO",
+                "Route %s: fare %s %s (%s)."
+                % (rid, format_price(price, cur), cur, why),
+            )
+        )
 
 
 def validate(feed, cfg):
@@ -428,6 +546,15 @@ def validate(feed, cfg):
                 "Timezone '%s' is not a known IANA timezone."
                 % ag["agency_timezone"]
             )
+    email = str(ag["agency_email"]).strip()
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        err("Agency email '%s' is not a valid email address." % email)
+    phone = str(ag["agency_phone"]).strip()
+    if phone and not re.match(r"^\+?[0-9][0-9 ()./-]{4,}$", phone):
+        warn(
+            "Agency phone '%s' looks unusual. Use digits, e.g. +255 ..."
+            % phone
+        )
     if not str(ag["agency_lang"]).strip():
         warn("No language selected for the feed.")
 
@@ -523,6 +650,34 @@ def validate(feed, cfg):
     for sh, n in counts.items():
         if n < 2:
             err("Shape %s has fewer than 2 points." % sh)
+
+    fc = cfg.get("fares") or {}
+    if fc.get("enabled"):
+        if not re.match(r"^[A-Z]{3}$", str(fc.get("currency", ""))):
+            err("Fare currency must be a 3-letter code such as TZS.")
+        for m in fc.get("parse_errors", []):
+            err(m)
+        bands = sorted(fc.get("bands", []))
+        for b in bands:
+            if b[0] > b[1]:
+                err("Fare band %g-%g km: 'from' is larger than 'to'." % b[:2])
+            if b[2] < 0:
+                err("Fare band %g-%g km has a negative fare." % b[:2])
+        for a, b in zip(bands, bands[1:]):
+            if b[0] <= a[1]:
+                err(
+                    "Fare bands %g-%g km and %g-%g km overlap."
+                    % (a[0], a[1], b[0], b[1])
+                )
+        if not bands and not fc.get("has_route_field"):
+            warn("Fares are enabled but there are no fare bands.")
+        ruled = {r["route_id"] for r in t["fare_rules.txt"]}
+        missing = [r for r in rids if r not in ruled]
+        if missing:
+            warn(
+                "%d route(s) have no fare: %s"
+                % (len(missing), ", ".join(missing[:6]))
+            )
 
     if not any(lvl == "ERROR" for lvl, _ in out):
         out.append(
